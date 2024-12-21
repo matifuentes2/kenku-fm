@@ -75,6 +75,16 @@ const createWindow = (): BrowserWindow => {
 
   let session = new SessionManager(mainWindow);
 
+  // Store the session manager reference
+  (mainWindow as any).sessionManager = session;
+
+  mainWindow.webContents.on("did-start-loading", () => {
+    // Restart the session on refresh
+    session.destroy();
+    session = new SessionManager(mainWindow);
+    (mainWindow as any).sessionManager = session;
+  });
+
   mainWindow.webContents.on("did-start-loading", () => {
     // Restart the session on refresh
     session.destroy();

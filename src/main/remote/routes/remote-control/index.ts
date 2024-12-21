@@ -2,31 +2,98 @@
 import { FastifyInstance } from 'fastify';
 import { BrowserWindow } from 'electron';
 import { PuppeteerManager } from '../../../managers/PuppeteerManager';
+import { SessionManager } from '../../../managers/SessionManager';
 
-// Define request/response types for TypeScript
 interface ExecuteActionBody {
   actions: {
-    type: 'click' | 'type' | 'evaluate' | 'waitForSelector';
+    type: 'click' | 'type' | 'evaluate' | 'waitForSelector' | 'loadURL';
     selector?: string;
     text?: string;
     script?: string;
+    url?: string;
+    viewId?: number;
   }[];
 }
 
 export default async function remoteControlRoutes(fastify: FastifyInstance) {
-  // Get all window IDs
+  // Get all window IDs and their views
   fastify.get('/windows', async (request, reply) => {
     const windows = BrowserWindow.getAllWindows();
     return {
       windows: windows.map(win => ({
         id: win.id,
         title: win.getTitle(),
-        url: win.webContents.getURL()
+        url: win.webContents.getURL(),
+        views: win.getBrowserViews().map(view => ({
+          id: view.webContents.id,
+          url: view.webContents.getURL()
+        }))
       }))
     };
   });
 
-  // Execute actions on a specific window
+  // Simple loadURL endpoint
+  fastify.post('/load-url', async (request, reply) => {
+    try {
+      const { url, windowId } = request.body as { url: string; windowId?: number };
+      
+      // Get the first window if windowId not specified
+      const window = windowId ? 
+        BrowserWindow.getAllWindows().find(win => win.id === windowId) :
+        BrowserWindow.getAllWindows()[0];
+        
+      if (!window) {
+        reply.code(404);
+        return { error: 'Window not found' };
+      }
+
+      const sessionManager = (window as any).sessionManager as SessionManager;
+      if (!sessionManager) {
+        reply.code(500);
+        return { error: 'Session manager not found' };
+      }
+
+      // Create a new browser view
+      const viewId = sessionManager.viewManager.createBrowserView(
+        url,
+        0,  // x
+        0,  // y
+        window.getBounds().width,
+        window.getBounds().height
+      );
+
+      // Wait for the page to load
+      await new Promise((resolve) => {
+        const view = sessionManager.viewManager.views[viewId];
+        if (!view) {
+          resolve(false);
+          return;
+        }
+
+        const loadHandler = () => {
+          view.webContents.removeListener('did-finish-load', loadHandler);
+          resolve(true);
+        };
+        view.webContents.on('did-finish-load', loadHandler);
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (view?.webContents) {
+            view.webContents.removeListener('did-finish-load', loadHandler);
+          }
+          resolve(false);
+        }, 30000);
+      });
+
+      return { success: true, viewId };
+    } catch (error) {
+      console.error('Error loading URL:', error);
+      reply.code(500);
+      return { error: error.message };
+    }
+  });
+
+  // Execute complex actions on a specific window
   fastify.post<{
     Params: { windowId: string };
     Body: ExecuteActionBody;
@@ -41,17 +108,66 @@ export default async function remoteControlRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      // Use the existing PuppeteerManager instance - no initialization needed
       const puppeteerManager = PuppeteerManager.getInstance();
       
-      // Check if puppeteer is ready
       if (!puppeteerManager.isInitialized()) {
         reply.code(500);
         return { error: 'Puppeteer is not initialized' };
       }
 
-      await puppeteerManager.automateWindow(window, async (page) => {
-        for (const action of actions) {
+      const sessionManager = (window as any).sessionManager as SessionManager;
+      if (!sessionManager) {
+        reply.code(500);
+        return { error: 'Session manager not found' };
+      }
+
+      for (const action of actions) {
+        if (action.type === 'loadURL') {
+          if (action.url) {
+            let viewId = action.viewId;
+            
+            // If no viewId specified or view doesn't exist, create a new one
+            if (!viewId || !sessionManager.viewManager.views[viewId]) {
+              viewId = sessionManager.viewManager.createBrowserView(
+                action.url,
+                0,
+                0,
+                window.getBounds().width,
+                window.getBounds().height
+              );
+            } else {
+              // Use existing view
+              sessionManager.viewManager.showBrowserView(viewId);
+              sessionManager.viewManager.loadURL(viewId, action.url);
+            }
+
+            // Wait for load
+            await new Promise((resolve) => {
+              const view = sessionManager.viewManager.views[viewId!];
+              if (!view) {
+                resolve(false);
+                return;
+              }
+
+              const loadHandler = () => {
+                view.webContents.removeListener('did-finish-load', loadHandler);
+                resolve(true);
+              };
+              view.webContents.on('did-finish-load', loadHandler);
+
+              setTimeout(() => {
+                if (view?.webContents) {
+                  view.webContents.removeListener('did-finish-load', loadHandler);
+                }
+                resolve(false);
+              }, 30000);
+            });
+          }
+          continue;
+        }
+
+        // Handle other Puppeteer actions
+        await puppeteerManager.automateWindow(window, async (page) => {
           switch (action.type) {
             case 'click':
               await page.click(action.selector!);
@@ -65,13 +181,13 @@ export default async function remoteControlRoutes(fastify: FastifyInstance) {
             case 'waitForSelector':
               await page.waitForSelector(action.selector!);
               break;
-            default:
-              throw new Error(`Unknown action type: ${(action as any).type}`);
           }
-        }
-      });
+        });
+      }
+
       return { success: true };
     } catch (error) {
+      console.error('Error executing actions:', error);
       reply.code(500);
       return { error: error.message };
     }
