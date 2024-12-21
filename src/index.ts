@@ -12,14 +12,30 @@ import "./menu";
 import icon from "./assets/icon.png";
 import { getUserAgent } from "./main/userAgent";
 import { SessionManager } from "./main/managers/SessionManager";
+import pie from 'puppeteer-in-electron';
+import { PuppeteerManager } from './main/managers/PuppeteerManager';
+
 import { runAutoUpdate } from "./autoUpdate";
 import { getSavedBounds, saveWindowBounds } from "./bounds";
+
+
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let window: BrowserWindow | null = null;
+
+// Initialize puppeteer first, before the app is ready
+pie.initialize(app).then(() => {
+  // Now we can import and use our PuppeteerManager
+  import('./main/managers/PuppeteerManager').then(({ PuppeteerManager }) => {
+      // When app is ready, setup everything else
+      app.whenReady().then(async () => {
+          try {
+              // Initialize our puppeteer manager
+              await PuppeteerManager.getInstance().initialize();
+
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -104,15 +120,25 @@ if (!hasSingleInstanceLock) {
   // This method will be called when Electron has finished
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
+  
   app.whenReady().then(async () => {
+
+    try {
+    // Initialize Puppeteer
+    await PuppeteerManager.getInstance().initialize();
     // Wait for widevine to load
     await widevine.whenReady();
     console.log("components ready:", components.status());
 
     window = createWindow();
     spoofUserAgent();
-  });
+    } catch (error) {
+      console.error('Failed to initialize application:', error);
+      app.quit();
+    }
 
+    });
+  
   app.on("second-instance", () => {
     // Someone tried to run a second instance, we should focus our window.
     if (window) {
@@ -126,7 +152,9 @@ if (!hasSingleInstanceLock) {
   // Quit when all windows are closed, except on macOS. There, it's common
   // for applications and their menu bar to stay active until the user quits
   // explicitly with Cmd + Q.
-  app.on("window-all-closed", () => {
+  app.on("window-all-closed", async () => {
+     // Clean up Puppeteer
+    await PuppeteerManager.getInstance().cleanup();
     if (process.platform !== "darwin") {
       app.quit();
     }
@@ -155,3 +183,11 @@ if (!hasSingleInstanceLock) {
     });
   });
 }
+
+} catch (error) {
+  console.error('Failed to initialize application:', error);
+  app.quit();
+}
+});
+});
+});

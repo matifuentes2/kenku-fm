@@ -6,6 +6,8 @@ import { get as soundboardGet } from "./routes/soundboard";
 import { play as soundboardPlay } from "./routes/soundboard/play";
 import { stop as soundboardStop } from "./routes/soundboard/stop";
 import { playback as soundboardPlayback } from "./routes/soundboard/playback";
+import remoteControlRoutes from './routes/remote-control';
+
 
 export type ReplyError = {
   statusCode: number;
@@ -41,4 +43,7 @@ export function registerRemote(manager: PlayerManager) {
   manager.fastify.register(soundboardPlayback(manager), {
     prefix: "/v1/soundboard/playback",
   });
+  
+  manager.fastify.register(remoteControlRoutes, { prefix: '/api/remote-control' });
+
 }
