@@ -16,9 +16,9 @@ export interface SettingsState {
 }
 
 const initialState: SettingsState = {
-  discordToken: "",
+  discordToken: process.env.MIKU_TOKEN,
   urlBarEnabled: true,
-  remoteEnabled: false,
+  remoteEnabled: true,
   remoteAddress: "127.0.0.1",
   remotePort: "3333",
   externalInputsEnabled: false,
